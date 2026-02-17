@@ -38,9 +38,11 @@ Then fill in the values:
 | Variable | Description |
 |---|---|
 | `DISCORD_BOT_TOKEN` | Token from the [Discord Developer Portal](https://discord.com/developers/applications) |
-| `DISCORD_CHANNEL_ID` | ID of the Discord channel to bridge |
+| `DISCORD_CHANNEL_IDS` | ID of the Discord channel to bridge, add multiple via comma-seperated values. |
 | `STOAT_BOT_TOKEN` | Token from your Stoat bot settings |
-| `STOAT_CHANNEL_ID` | ID of the Stoat channel to bridge |
+| `STOAT_CHANNEL_IDS` | ID of the Stoat channel to bridge, add multiple via comma-seperated values.|
+
+NOTE: Pos. 1 of DISCORD_CHANNEL_IDS will be linked to Pos. 1 of STOAT_CHANNEL_IDS, Pos. 2 of DC to Pos. 2 of Stoat and so on
 
 **3. Discord bot permissions**
 
