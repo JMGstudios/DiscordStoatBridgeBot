@@ -1,6 +1,6 @@
 # Discord ↔ Stoat Bridge
 
-A lightweight bidirectional bridge that forwards messages between a Discord channel and a Stoat channel using webhooks and masquerades to preserve usernames and avatars on both sides.
+A lightweight bidirectional bridge that forwards messages between Discord and Stoat channels using webhooks and masquerade.
 
 ## How it works
 
@@ -11,53 +11,82 @@ Stoat user   → Stoat Bot   → Discord channel (via Discord webhook)
 
 Messages are forwarded in real time. Usernames and avatars are carried over so it looks native on both platforms.
 
+### Replies
+
+| Direction | Behaviour |
+|---|---|
+| Discord → Stoat | Native reply when the original message is in cache; sent without reply otherwise |
+| Stoat → Discord | Quote fallback (`-# ↩ **Author**: *snippet*`) – Discord webhooks do not support native replies |
+
+The bridge caches the last **500** message ID pairs in memory (you can change this value). Replies to messages older than that are sent without a reply indicator.
+
+### Files & attachments
+
+| Direction | Behaviour |
+|---|---|
+| Discord → Stoat | The bare attachment URL is appended to the message text |
+| Stoat → Discord | File is downloaded into RAM and re-uploaded as a Discord attachment. Files larger than **25 MiB** are sent as a fallback link instead |
+
+### Mention & emoji resolution
+
+| Direction | What gets resolved |
+|---|---|
+| Discord → Stoat | `<@id>` → `@Nickname`, `<#id>` → `#channel-name`, `<@&id>` → `@role-name`, `<:n:id>` → `:n:` |
+| Stoat → Discord | `<@ULID>` → `@DisplayName`, `:ULID:` → `:emoji-name:` |
+
 ## Requirements
 
-- Python 3.13+
-- A Discord bot with the **Message Content**, **Guilds**, and **Webhooks** intents enabled
-- A Stoat bot token
+- Python 3.10+
+- A Discord bot with the **Message Content**, **Server Members**, **Guilds**, and **Webhooks** intents enabled
+- A Stoat bot
 
 ```
-pip install discord.py stoat.py python-dotenv
+pip install discord.py stoat.py aiohttp python-dotenv
 ```
 
 ## Setup
 
 **1. Clone the repo**
+
 ```bash
 git clone https://github.com/your-username/discord-stoat-bridge.git
 cd discord-stoat-bridge
 ```
 
 **2. Create your `.env` file**
+
 ```bash
 cp .env.example .env
 ```
+
 Then fill in the values:
 
 | Variable | Description |
 |---|---|
 | `DISCORD_BOT_TOKEN` | Token from the [Discord Developer Portal](https://discord.com/developers/applications) |
-| `DISCORD_CHANNEL_IDS` | ID of the Discord channel to bridge, add multiple via comma-seperated values. |
 | `STOAT_BOT_TOKEN` | Token from your Stoat bot settings |
-| `STOAT_CHANNEL_IDS` | ID of the Stoat channel to bridge, add multiple via comma-seperated values.|
+| `DISCORD_CHANNEL_IDS` | Comma-separated Discord channel IDs to bridge |
+| `STOAT_CHANNEL_IDS` | Comma-separated Stoat channel IDs to bridge |
+| `REVOLT_API_URL` | *(optional)* Revolt API base URL. Defaults to `https://api.revolt.chat` |
 
-NOTE: Pos. 1 of DISCORD_CHANNEL_IDS will be linked to Pos. 1 of STOAT_CHANNEL_IDS, Pos. 2 of DC to Pos. 2 of Stoat and so on
+> **Pairing:** position 1 of `DISCORD_CHANNEL_IDS` is bridged with position 1 of `STOAT_CHANNEL_IDS`, position 2 with position 2, and so on. The two lists must have the same length.
 
 **3. Discord bot permissions**
 
 Make sure your bot has the following permissions in the target channel:
+
 - Read Messages
 - Send Messages
 - Manage Webhooks
 
 **4. Run**
+
 ```bash
 python bridge.py
 ```
 
 ## Notes
 
-- Do **not** rename `bridge.py` to `stoat.py` – it will conflict with the `stoat.py` library.
-- The bridge creates a webhook named `Stoat Bridge` in your Discord channel automatically. If one already exists (from a previous run), it will be reused.
-- Messages from the bridge itself are ignored to prevent loops.
+- The bridge creates a webhook named `Stoat Bridge` in your Discord channel automatically. If one already exists from a previous run it will be reused.
+- Messages originating from the bridge webhook are ignored to prevent forwarding loops.
+- Stoat custom emoji names are resolved via the Stoat API and cached in memory for the duration of the process.
