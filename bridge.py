@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Discord / Stoat Bidirectional Bridge
 
@@ -43,7 +42,6 @@ load_dotenv()
 #  CONFIGURATION
 # ──────────────────────────────────────────────────────────────────────────────
 
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "")
 STOAT_BOT_TOKEN   = os.getenv("STOAT_BOT_TOKEN", "")
 
 _discord_raw = os.getenv("DISCORD_CHANNEL_IDS", "")
@@ -465,7 +463,7 @@ class StoatBot(stoat.Client):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._http_session: aiohttp.ClientSession | None = None
-        self._discord_bot: "DiscordBot | None" = None  # set in main()
+        self._discord_bot: "commands.Bot | None" = None  # set in setup()
 
     async def on_ready(self, event, /):
         self._http_session = aiohttp.ClientSession()
@@ -617,14 +615,13 @@ class StoatBot(stoat.Client):
             if msg_id is None:
                 return
 
-            # Loop-break: if we triggered this deletion ourselves, ignore it.
             if msg_id in _stoat_deleting:
                 _stoat_deleting.discard(msg_id)
                 return
 
             discord_msg_id = _s2d.get(str(msg_id))
             if discord_msg_id is None:
-                return  # Not a bridged message
+                return
 
             # Resolve the Discord channel ID
             stoat_ch_id   = channel_id or next(
@@ -689,33 +686,44 @@ class StoatBot(stoat.Client):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  DISCORD BOT
+#  DISCORD COG
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-class DiscordBot(commands.Bot):
+class BridgeCog(commands.Cog):
 
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.guilds          = True
-        intents.webhooks        = True
-        intents.members         = True
-        super().__init__(command_prefix="!", intents=intents)
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
 
         # Keep a reference to the StoatBot so we can call delete on it
         self._stoat_bot: StoatBot | None = None
 
-    async def setup_hook(self):
-        self.loop.create_task(self._setup_webhooks())
+    async def cog_load(self):
+        _load_notified_users()
+
+        stoat_bot = StoatBot(token=STOAT_BOT_TOKEN)
+        stoat_bot._discord_bot = self.bot
+        self._stoat_bot = stoat_bot
+
+        logger.info(f"Bridge starting with {PAIR_COUNT} channel pair(s)...")
+        for i, (d, s) in enumerate(zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS), 1):
+            logger.info(f"  Pair {i}: Discord {d} <-> Stoat {s}")
+
+        asyncio.create_task(stoat_bot.start())
+        asyncio.create_task(self._setup_webhooks())
+
+    async def cog_unload(self):
+        if self._stoat_bot is not None:
+            if self._stoat_bot._http_session is not None:
+                await self._stoat_bot._http_session.close()
 
     async def _setup_webhooks(self):
-        await self.wait_until_ready()
+        await self.bot.wait_until_ready()
         for discord_id in DISCORD_CHANNEL_IDS:
             try:
-                channel = self.get_channel(discord_id) or await self.fetch_channel(discord_id)
+                channel = self.bot.get_channel(discord_id) or await self.bot.fetch_channel(discord_id)
                 for wh in await channel.webhooks():
-                    if wh.user == self.user:
+                    if wh.user == self.bot.user:
                         discord_webhooks[discord_id] = wh
                         logger.info(f"Discord: reusing webhook '{wh.name}' for channel {discord_id}")
                         break
@@ -726,8 +734,9 @@ class DiscordBot(commands.Bot):
             except Exception as exc:
                 logger.error(f"Discord: could not set up webhook for channel {discord_id} - {exc}")
 
+    @commands.Cog.listener()
     async def on_ready(self):
-        logger.info(f"Discord: connected as {self.user}")
+        logger.info(f"Discord: connected as {self.bot.user}")
         logger.info(f"Discord: bridging {PAIR_COUNT} channel pair(s)")
 
     # ── Send a DM on Discord ──────────────────────────────────────────────────
@@ -748,8 +757,9 @@ class DiscordBot(commands.Bot):
         except Exception as exc:
             logger.debug(f"Discord: could not DM {user}: {exc}")
 
+    @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author == self.user:
+        if message.author == self.bot.user:
             return
 
         if message.webhook_id is not None:
@@ -843,6 +853,7 @@ class DiscordBot(commands.Bot):
 
     # ── Message deletion: Discord → delete on Stoat ───────────────────────────
 
+    @commands.Cog.listener()
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
         """When any Discord message is deleted remove the mirrored Stoat message."""
         discord_msg_id = payload.message_id
@@ -858,7 +869,7 @@ class DiscordBot(commands.Bot):
 
         stoat_msg_id = _d2s.get(discord_msg_id)
         if stoat_msg_id is None:
-            return  # Not a bridged message
+            return
 
         stoat_ch_id = DISCORD_TO_STOAT[discord_ch_id]
 
@@ -873,33 +884,11 @@ class DiscordBot(commands.Bot):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  MAIN
+#  COG SETUP
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-async def main():
-    if not all([DISCORD_BOT_TOKEN, STOAT_BOT_TOKEN, DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS]):
+async def setup(bot: commands.Bot):
+    if not all([STOAT_BOT_TOKEN, DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS]):
         raise RuntimeError("Missing configuration – check your .env file.")
-
-    _load_notified_users()
-
-    logger.info(f"Bridge starting with {PAIR_COUNT} channel pair(s)...")
-    for i, (d, s) in enumerate(zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS), 1):
-        logger.info(f"  Pair {i}: Discord {d} <-> Stoat {s}")
-
-    stoat_bot   = StoatBot(token=STOAT_BOT_TOKEN)
-    discord_bot = DiscordBot()
-    discord_bot._stoat_bot = stoat_bot   # cross-reference for deletion
-    stoat_bot._discord_bot = discord_bot  # cross-reference for user-message deletion
-
-    await asyncio.gather(
-        stoat_bot.start(),
-        discord_bot.start(DISCORD_BOT_TOKEN),
-    )
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bridge stopped")
+    await bot.add_cog(BridgeCog(bot))
