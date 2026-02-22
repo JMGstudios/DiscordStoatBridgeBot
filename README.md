@@ -42,8 +42,9 @@ pip install discord.py stoat.py aiohttp python-dotenv
 
 **1. Clone the repo**
 ```bash
-git clone https://github.com/your-username/discord-stoat-bridge.git
-cd discord-stoat-bridge
+git clone https://github.com/JMGstudios/DiscordStoatBridgeBot.git
+cd DiscordStoatBridgeBot
+git checkout cog-extension
 ```
 
 **2. Create your `.env` file**
