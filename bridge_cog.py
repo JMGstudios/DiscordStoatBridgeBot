@@ -173,14 +173,10 @@ stoat_channels:  dict[str, object]           = {}
 _d2s: OrderedDict[int, str] = OrderedDict()   # discord_msg_id → stoat_msg_id
 _s2d: OrderedDict[str, int] = OrderedDict()   # stoat_msg_id   → discord_msg_id
 
-# Discord message IDs that were sent via webhook (Stoat → Discord direction).
-# Regular user messages (Discord → Stoat direction) are NOT in this set.
-# Used in on_message_delete to choose the right deletion method.
 _webhook_discord_ids: set[int] = set()
 
-# IDs the bridge is currently deleting itself – used to break deletion loops.
-_discord_deleting: set[int] = set()   # discord msg IDs we are about to delete
-_stoat_deleting:   set[str] = set()   # stoat   msg IDs we are about to delete
+_discord_deleting: set[int] = set()  
+_stoat_deleting:   set[str] = set() 
 
 
 def _cache_pair(discord_id: int, stoat_id: str, *, from_webhook: bool = False) -> None:
@@ -858,7 +854,7 @@ class BridgeCog(commands.Cog):
         """When any Discord message is deleted remove the mirrored Stoat message."""
         discord_msg_id = payload.message_id
 
-        # Loop-break: if we triggered this deletion ourselves, ignore it.
+        # Loop-break: if it triggered this deletion itself, ignore it.
         if discord_msg_id in _discord_deleting:
             _discord_deleting.discard(discord_msg_id)
             return
