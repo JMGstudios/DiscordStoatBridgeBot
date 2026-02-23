@@ -1,0 +1,4 @@
+discord.py
+stoat.py
+aiohttp
+python-dotenv

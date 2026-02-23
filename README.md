@@ -34,17 +34,22 @@ The bridge caches the last **500** message ID pairs in memory (you can change th
 | Discord → Stoat | `<@id>` → `@Nickname`, `<#id>` → `#channel-name`, `<@&id>` → `@role-name`, `<:n:id>` → `:n:` |
 | Stoat → Discord | `<@ULID>` → `@DisplayName`, `:ULID:` → `:emoji-name:` |
 
-## Requirements
+
+## Setup
+
+### Local Setup
+
+#### Requirements
 
 - Python 3.10+
 - A Discord bot with the **Message Content**, **Server Members**, **Guilds**, and **Webhooks** intents enabled
 - A Stoat bot
 
+#### Install Steps
+
 ```
 pip install discord.py stoat.py aiohttp python-dotenv
 ```
-
-## Setup
 
 **1. Clone the repo**
 
@@ -83,6 +88,16 @@ Make sure your bot has the following permissions in the target channel:
 
 ```bash
 python bridge.py
+```
+
+### Docker Run
+
+Alternatively, you can run the bridge via Docker. Just create your .env file from the local setup steps, then run the following command
+
+```bash
+docker run \
+  --env-file .env \
+  ghcr.io/jmgstudios/discordstoatbridgebot:latest
 ```
 
 ## Notes
