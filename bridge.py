@@ -34,10 +34,177 @@ from types import SimpleNamespace
 import aiohttp
 import discord
 from discord.ext import commands
-from dotenv import load_dotenv
+from dotenv import load_dotenv, set_key, dotenv_values
 import stoat
 
-load_dotenv()
+# ──────────────────────────────────────────────────────────────────────────────
+#  INTERACTIVE .env SETUP
+# ──────────────────────────────────────────────────────────────────────────────
+
+ENV_FILE = Path(".env")
+
+
+def _prompt(label: str, secret: bool = False, allow_empty: bool = False) -> str:
+    """Prompt the user on the terminal until a non-empty value is entered."""
+    import getpass
+    while True:
+        try:
+            if secret:
+                print(f"  {label}:")
+                print("  ⌨  Typing is hidden for security – this is normal, just type and press Enter.")
+                value = getpass.getpass("  > ").strip()
+            else:
+                value = input(f"  {label}: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nSetup aborted.")
+            raise SystemExit(1)
+        if value or allow_empty:
+            return value
+        print("    ⚠  Value cannot be empty, please try again.")
+
+
+def _prompt_channel_pairs() -> tuple[str, str]:
+    """
+    Ask the user to configure channel pairs one-by-one.
+    Returns (discord_ids_csv, stoat_ids_csv).
+    """
+    print("  You will now link Discord channels to Stoat channels one pair at a time.")
+    print("  Each pair bridges one Discord channel with one Stoat channel.\n")
+
+    discord_ids: list[str] = []
+    stoat_ids:   list[str] = []
+    pair_num = 1
+
+    while True:
+        print(f"  ── Pair {pair_num} {'(first pair)' if pair_num == 1 else ''} ──")
+        d_id = _prompt(f"  Discord Channel ID for pair {pair_num}")
+        s_id = _prompt(f"  Stoat   Channel ID for pair {pair_num}")
+        discord_ids.append(d_id.strip())
+        stoat_ids.append(s_id.strip())
+
+        print(f"\n  ✔  Pair {pair_num} saved: Discord {d_id.strip()} ↔ Stoat {s_id.strip()}")
+
+        if pair_num >= 2:
+            print(f"\n  Current pairs:")
+            for i, (d, s) in enumerate(zip(discord_ids, stoat_ids), 1):
+                print(f"    {i}. Discord {d} ↔ Stoat {s}")
+
+        print()
+        try:
+            again = input("  Add another channel pair? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nSetup aborted.")
+            raise SystemExit(1)
+
+        if again in ("y", "yes"):
+            pair_num += 1
+        else:
+            break
+
+    return ",".join(discord_ids), ",".join(stoat_ids)
+
+
+def _validate_channel_pairs(discord_raw: str, stoat_raw: str) -> bool:
+    """Return True when both lists are non-empty and equal in length."""
+    d = [x.strip() for x in discord_raw.split(",") if x.strip()]
+    s = [x.strip() for x in stoat_raw.split(",")   if x.strip()]
+    return bool(d) and bool(s) and len(d) == len(s)
+
+
+def interactive_env_setup() -> None:
+    """
+    - .env does not exist → create it from scratch via prompts
+    - .env exists but is corrupted / unparseable → prompt for all values
+    - .env exists but specific keys are missing or empty → prompt only for those
+    - .env exists but DISCORD_CHANNEL_IDS / STOAT_CHANNEL_IDS are mismatched → re-prompt for both
+    """
+
+    existing: dict[str, str] = {}
+    if ENV_FILE.exists():
+        try:
+            existing = {k: (v or "") for k, v in dotenv_values(ENV_FILE).items()}
+        except Exception as exc:
+            print(f"⚠  Could not parse {ENV_FILE}: {exc}")
+            print("   Starting fresh – you will be asked for all values.\n")
+
+
+    needs_discord_token = not existing.get("DISCORD_BOT_TOKEN", "").strip()
+    needs_stoat_token   = not existing.get("STOAT_BOT_TOKEN",   "").strip()
+
+    discord_raw  = existing.get("DISCORD_CHANNEL_IDS", "")
+    stoat_raw    = existing.get("STOAT_CHANNEL_IDS",   "")
+    needs_channels = not _validate_channel_pairs(discord_raw, stoat_raw)
+
+    needs_revolt_url = not existing.get("REVOLT_API_URL", "").strip()
+
+    anything_missing = any([
+        needs_discord_token, needs_stoat_token, needs_channels, needs_revolt_url,
+    ])
+
+    if not anything_missing:
+        load_dotenv(ENV_FILE)
+        print(f"Config loaded from: {ENV_FILE.resolve()}")
+        return  # All good – no interaction needed
+
+    banner = "=" * 60
+    print(f"\n{banner}")
+    print("  Stoat ↔ Discord Bridge – First-Time / Repair Setup")
+    print(banner)
+
+    if not ENV_FILE.exists():
+        print("  ℹ  No .env file found – let's create one.")
+    else:
+        missing_keys = []
+        if needs_discord_token: missing_keys.append("DISCORD_BOT_TOKEN")
+        if needs_stoat_token:   missing_keys.append("STOAT_BOT_TOKEN")
+        if needs_channels:      missing_keys.append("DISCORD_CHANNEL_IDS / STOAT_CHANNEL_IDS")
+        if needs_revolt_url:    missing_keys.append("REVOLT_API_URL")
+        print(f"  ⚠  Missing or invalid keys: {', '.join(missing_keys)}")
+    print("  Press Ctrl-C at any time to abort.\n")
+
+    # Discord bot token
+    if needs_discord_token:
+        print("› Discord Bot Token")
+        print("  Get it at: https://discord.com/developers/applications")
+        existing["DISCORD_BOT_TOKEN"] = _prompt("Discord Bot Token", secret=True)
+        print()
+
+    # Stoat bot token
+    if needs_stoat_token:
+        print("› Stoat Bot Token")
+        print("  Get it in your Stoat server's bot settings.")
+        existing["STOAT_BOT_TOKEN"] = _prompt("Stoat Bot Token", secret=True)
+        print()
+
+    # Channel pairs – collected one pair at a time
+    if needs_channels:
+        print("› Channel Pairs")
+        d_raw, s_raw = _prompt_channel_pairs()
+        existing["DISCORD_CHANNEL_IDS"] = d_raw
+        existing["STOAT_CHANNEL_IDS"]   = s_raw
+        print()
+
+    # Revolt API URL (optional – has a sensible default)
+    if needs_revolt_url:
+        print("› Revolt / Stoat API URL")
+        print("  Press Enter to accept the default!")
+        url = _prompt("API URL  [https://api.revolt.chat]", allow_empty=True)
+        existing["REVOLT_API_URL"] = url or "https://api.revolt.chat"
+        print()
+
+    # ── 4. Write / update the .env file ─────────────────────────────────────
+    ENV_FILE.touch(exist_ok=True)
+    for key, value in existing.items():
+        set_key(str(ENV_FILE), key, value)
+
+    print(f"  ✔  Configuration saved to {ENV_FILE.resolve()}")
+    print(f"{banner}\n")
+
+    # ── 5. Re-load so os.getenv() picks up the freshly written values ────────
+    load_dotenv(ENV_FILE, override=True)
+
+
+interactive_env_setup()
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  CONFIGURATION
