@@ -54,7 +54,7 @@ cd DiscordStoatBridgeBot
 
 **2. Run the bridge**
 ```bash
-python main.py
+python bridge.py
 ```
 
 If no `.env` file is found, or if required values are missing, the bridge will automatically start an **interactive setup wizard** on first launch:
@@ -88,7 +88,7 @@ If no `.env` file is found, or if required values are missing, the bridge will a
 ============================================================
 ```
 
-The generated `.env` is saved next to `main.py`. On every subsequent start the bridge prints the config path so you always know which file it loaded:
+The generated `.env` is saved next to `bridge.py`. On every subsequent start the bridge prints the config path so you always know which file it loaded:
 ```
 Config loaded from: /your/path/.env
 ```
