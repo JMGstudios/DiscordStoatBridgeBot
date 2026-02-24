@@ -1,0 +1,8 @@
+services:
+  bridgebot:
+    image: ghcr.io/jmgstudios/discordstoatbridgebot:latest
+    volumes:
+      - ./config:/app
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
