@@ -111,12 +111,28 @@ Make sure your bot has the following permissions in the target channel:
 docker pull ghcr.io/jmgstudios/discordstoatbridgebot:latest
 ```
 
-**2. Run it**
+**2. Create a persistent config file on your host**
 ```bash
-docker run -it ghcr.io/jmgstudios/discordstoatbridgebot:latest
+touch ~/.config/bridgebot/.env
 ```
 
-On first launch the setup wizard will guide you through the configuration. The `-it` flag is required for the interactive prompts to work. The generated `.env` is saved inside the container and reused on every subsequent start.
+> **Important:** You must mount only the `.env` file – not the entire directory. Mounting the whole folder would hide `bridge.py` inside the container and the bot won't start.
+
+**3. First start – interactive setup**
+```bash
+sudo docker run -it -v ~/.config/bridgebot/.env:/app/.env ghcr.io/jmgstudios/discordstoatbridgebot:latest
+```
+
+The setup wizard will guide you through the configuration and save your tokens and channel pairs to `~/.config/bridgebot/.env` on your host machine.
+
+**4. Every new start**
+```bash
+sudo docker run -it -v ~/.config/bridgebot/.env:/app/.env ghcr.io/jmgstudios/discordstoatbridgebot:latest
+```
+
+Same command – the bridge will find the existing `.env`, skip the setup wizard, and start immediately.
+
+> The `-it` flag is required for the interactive prompts on first launch. You can keep using it on subsequent starts without any downside.
 
 ---
 
