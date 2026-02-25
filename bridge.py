@@ -634,9 +634,26 @@ class StoatBot(stoat.Client):
         self._http_session: aiohttp.ClientSession | None = None
         self._discord_bot: "DiscordBot | None" = None  # set in main()
 
+        # Watchdog tracking
+        self._ready_received:        bool  = False
+        self._connection_attempt_time: float = 0.0   # set by restart wrapper
+        self._last_event_time:        float = 0.0    # set by restart wrapper
+
     async def on_ready(self, event, /):
+        # Close any leftover HTTP session from a previous connection cycle
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
         self._http_session = aiohttp.ClientSession()
+
+        # Mark connection as alive
+        self._ready_received  = True
+        self._last_event_time = asyncio.get_event_loop().time()
+
         logger.info(f"Stoat: connected as {self.me}")
+
+        # Clear stale channel refs before repopulating (important on reconnect)
+        stoat_channels.clear()
+
         for stoat_id in STOAT_CHANNEL_IDS:
             try:
                 ch = await self.fetch_channel(stoat_id)
@@ -684,6 +701,7 @@ class StoatBot(stoat.Client):
             logger.debug(f"Stoat: could not DM user {user_id}: {exc}")
 
     async def on_message_create(self, event: stoat.MessageCreateEvent, /):
+        self._last_event_time = asyncio.get_event_loop().time()
         msg = event.message
 
         if msg.author_id == self.me.id:
@@ -853,6 +871,96 @@ class StoatBot(stoat.Client):
 
         except Exception as exc:
             logger.error(f"on_message_delete (Stoat): unexpected error: {exc}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  STOAT CONNECTION WATCHDOG & RESTART WRAPPER
+# ──────────────────────────────────────────────────────────────────────────────
+
+# How long after a connection attempt to wait for on_ready before giving up
+_READY_TIMEOUT_S:   int = 30
+# How long a fully-connected bot may stay silent before we assume it's dead
+_SILENCE_TIMEOUT_S: int = 300   # 5 minutes
+# How often the watchdog checks
+_WATCHDOG_INTERVAL: int = 20
+
+
+async def _stoat_watchdog(stoat_bot: "StoatBot") -> None:
+    """
+    Background task: periodically checks that the Stoat WebSocket connection is
+    healthy and forces a reconnect if it goes stale.
+
+    Two scenarios are detected:
+      1. on_ready never fired within _READY_TIMEOUT_S seconds of the connection
+         attempt  →  the WebSocket connected but authentication/setup silently
+         stalled (the intermittent bug reported by the user).
+      2. on_ready fired but then no further events arrived for _SILENCE_TIMEOUT_S
+         →  the connection silently dropped after initial setup.
+
+    In both cases we call stoat_bot.close(), which makes the running start()
+    coroutine return, triggering the restart loop in _run_stoat_with_restart().
+    """
+    logger.debug("Stoat watchdog: started")
+    while True:
+        await asyncio.sleep(_WATCHDOG_INTERVAL)
+        now = asyncio.get_event_loop().time()
+
+        if not stoat_bot._ready_received:
+            elapsed = now - stoat_bot._connection_attempt_time
+            if stoat_bot._connection_attempt_time > 0 and elapsed > _READY_TIMEOUT_S:
+                logger.warning(
+                    f"Stoat watchdog: no Ready event after {elapsed:.0f}s "
+                    f"(threshold={_READY_TIMEOUT_S}s) – forcing reconnect"
+                )
+                try:
+                    await stoat_bot.close()
+                except Exception as exc:
+                    logger.debug(f"Stoat watchdog: close() error: {exc}")
+        else:
+            elapsed = now - stoat_bot._last_event_time
+            if stoat_bot._last_event_time > 0 and elapsed > _SILENCE_TIMEOUT_S:
+                logger.warning(
+                    f"Stoat watchdog: connection silent for {elapsed:.0f}s "
+                    f"(threshold={_SILENCE_TIMEOUT_S}s) – forcing reconnect"
+                )
+                try:
+                    await stoat_bot.close()
+                except Exception as exc:
+                    logger.debug(f"Stoat watchdog: close() error: {exc}")
+
+
+async def _run_stoat_with_restart(stoat_bot: "StoatBot") -> None:
+    """
+    Runs stoat_bot.start() in an infinite restart loop.
+    Resets watchdog state before every connection attempt so the watchdog
+    can accurately detect a stuck or dropped connection.
+    """
+    RESTART_DELAY = 5
+    while True:
+        # Reset watchdog state for the new connection attempt
+        stoat_bot._ready_received         = False
+        stoat_bot._connection_attempt_time = asyncio.get_event_loop().time()
+        stoat_bot._last_event_time         = asyncio.get_event_loop().time()
+
+        logger.info("Stoat: (re)starting WebSocket connection…")
+        try:
+            await stoat_bot.start()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(f"Stoat: connection error – {exc}")
+        finally:
+            # Always clean up the HTTP session so on_ready can create a fresh one
+            if stoat_bot._http_session and not stoat_bot._http_session.closed:
+                try:
+                    await stoat_bot._http_session.close()
+                except Exception:
+                    pass
+                stoat_bot._http_session = None
+            stoat_channels.clear()
+
+        logger.warning(f"Stoat: disconnected – restarting in {RESTART_DELAY}s…")
+        await asyncio.sleep(RESTART_DELAY)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1060,7 +1168,8 @@ async def main():
     stoat_bot._discord_bot = discord_bot  # cross-reference for user-message deletion
 
     await asyncio.gather(
-        stoat_bot.start(),
+        _run_stoat_with_restart(stoat_bot),
+        _stoat_watchdog(stoat_bot),
         discord_bot.start(DISCORD_BOT_TOKEN),
     )
 
