@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+import sys
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,7 +67,6 @@ def _prompt(label: str, secret: bool = False, allow_empty: bool = False) -> str:
 def _prompt_channel_pairs() -> tuple[str, str]:
     """
     Ask the user to configure channel pairs one-by-one.
-    Returns (discord_ids_csv, stoat_ids_csv).
     """
     print("  You will now link Discord channels to Stoat channels one pair at a time.")
     print("  Each pair bridges one Discord channel with one Stoat channel.\n")
@@ -91,7 +91,7 @@ def _prompt_channel_pairs() -> tuple[str, str]:
 
         print()
         try:
-            again = input("  Add another channel pair? [y/N]: ").strip().lower()
+            again = input("  Add another channel pair? [y/n]: ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\nSetup aborted.")
             raise SystemExit(1)
@@ -105,7 +105,6 @@ def _prompt_channel_pairs() -> tuple[str, str]:
 
 
 def _validate_channel_pairs(discord_raw: str, stoat_raw: str) -> bool:
-    """Return True when both lists are non-empty and equal in length."""
     d = [x.strip() for x in discord_raw.split(",") if x.strip()]
     s = [x.strip() for x in stoat_raw.split(",")   if x.strip()]
     return bool(d) and bool(s) and len(d) == len(s)
@@ -239,7 +238,7 @@ MAX_FILE_SIZE  = 25 * 1024 * 1024
 MSG_CACHE_SIZE = 500
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  LOGGING
+#  LOGGING - SET YOUR LOGGING LEVEL HERE
 # ──────────────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -347,9 +346,9 @@ _s2d: OrderedDict[str, int] = OrderedDict()   # stoat_msg_id   → discord_msg_i
 # Used in on_message_delete to choose the right deletion method.
 _webhook_discord_ids: set[int] = set()
 
-# IDs the bridge is currently deleting itself – used to break deletion loops.
-_discord_deleting: set[int] = set()   # discord msg IDs we are about to delete
-_stoat_deleting:   set[str] = set()   # stoat   msg IDs we are about to delete
+# used to break deletion loops.
+_discord_deleting: set[int] = set()   # discord msg IDs
+_stoat_deleting:   set[str] = set()   # stoat   msg IDs
 
 
 def _cache_pair(discord_id: int, stoat_id: str, *, from_webhook: bool = False) -> None:
@@ -377,7 +376,6 @@ def _extract_id(obj) -> str | None:
 
 
 def _stoat_asset_url(asset) -> str | None:
-    """asset.url is a METHOD on stoat Asset objects – call it safely."""
     if asset is None:
         return None
     url_attr = getattr(asset, "url", None)
@@ -633,22 +631,103 @@ class StoatBot(stoat.Client):
         super().__init__(**kwargs)
         self._http_session: aiohttp.ClientSession | None = None
         self._discord_bot: "DiscordBot | None" = None  # set in main()
+        self._healthpulse: bool = False
+        self._health_msg_id: str | None = None
 
     async def on_ready(self, event, /):
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
         self._http_session = aiohttp.ClientSession()
-        logger.info(f"Stoat: connected as {self.me}")
+
+        logger.info(f"Stoat: on_ready fired as {self.me} – running health check…")
+
+        stoat_channels.clear()
         for stoat_id in STOAT_CHANNEL_IDS:
             try:
                 ch = await self.fetch_channel(stoat_id)
                 stoat_channels[stoat_id] = ch
-                logger.info(f"Stoat: listening in #{ch.name} (id={stoat_id})")
             except Exception as exc:
                 logger.error(f"Stoat: could not fetch channel {stoat_id} - {exc}")
+
+        await self._run_health_check()
+
+    async def _run_health_check(self) -> None:
+        """
+        This is due to problems in stoat's API
+        Send a message into stoat channel
+        If on_message triggers: Succesfull, message deleted again
+        If on_message doesnt trigger: Not successfull, restart and message deleted
+        """
+        if not STOAT_CHANNEL_IDS:
+            logger.warning("Stoat: health check skipped – no channels configured")
+            self._log_channels_ready()
+            return
+
+        first_id = STOAT_CHANNEL_IDS[0]
+        ch = stoat_channels.get(first_id)
+        if ch is None:
+            logger.warning("Stoat: health check skipped – channel not fetched")
+            return
+
+        self._healthpulse   = False
+        self._health_msg_id = None
+
+        try:
+            sent = await ch.send(content="🔧")
+            self._health_msg_id = _extract_id(sent)
+            logger.info("Stoat: health check message sent, waiting 5s…")
+        except Exception as exc:
+            logger.error(f"Stoat: health check send failed: {exc} - restarting")
+            self._do_restart()
+            return
+
+        await asyncio.sleep(5)
+
+        # Always delete the test message — regardless of outcome
+        if self._health_msg_id:
+            await self._delete_health_message(first_id, self._health_msg_id)
+            self._health_msg_id = None
+
+        if self._healthpulse:
+            logger.info("Stoat: ✓ health check passed")
+            self._log_channels_ready()
+        else:
+            logger.error(
+                "Stoat: ✗ health check FAILED"
+                "Restarting process…"
+            )
+            self._do_restart()
+
+    async def _delete_health_message(self, channel_id: str, message_id: str) -> None:
+        if self._http_session is None or self._http_session.closed:
+            return
+        try:
+            async with self._http_session.delete(
+                f"{REVOLT_API_URL}/channels/{channel_id}/messages/{message_id}",
+                headers={"x-bot-token": STOAT_BOT_TOKEN},
+            ) as resp:
+                if resp.status in (200, 204):
+                    logger.debug("Stoat: health check message deleted")
+                else:
+                    logger.debug(f"Stoat: health message delete returned HTTP {resp.status}")
+        except Exception as exc:
+            logger.debug(f"Stoat: could not delete health message: {exc}")
+
+    def _log_channels_ready(self) -> None:
+        for stoat_id, ch in stoat_channels.items():
+            logger.info(f"Stoat: ✓ listening in #{ch.name} (id={stoat_id})")
+
+    def _do_restart(self) -> None:
+        logger.warning("Stoat: performing full process restart…")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    async def on_error(self, event, /):
+        logger.error(f"Stoat: ⚠ Error event from gateway: {event!r}")
 
     # ── Send a DM on Stoat ────────────────────────────────────────────────────
 
     async def _try_send_stoat_dm(self, user_id: str) -> None:
-        """Send a DM to a Stoat user."""
+        """Send a welcome DM to a Stoat user."""
         session = self._http_session
         if session is None:
             return
@@ -687,6 +766,7 @@ class StoatBot(stoat.Client):
         msg = event.message
 
         if msg.author_id == self.me.id:
+            self._healthpulse = True   # health check: own message received
             return
 
         stoat_id = msg.channel.id
@@ -760,7 +840,7 @@ class StoatBot(stoat.Client):
                 wait       = True,
             )
             _cache_pair(sent.id, str(msg.id), from_webhook=True)
-            logger.debug(f"Stoat -> Discord: cached discord={sent.id} <-> stoat={msg.id}")
+            logger.debug(f"Stoat -> Discord: ✓ forwarded message from {author_name}")
         except Exception as exc:
             logger.error(f"Stoat -> Discord (channel {discord_id}): {exc}")
         finally:
@@ -900,7 +980,7 @@ class DiscordBot(commands.Bot):
     # ── Send a DM on Discord ──────────────────────────────────────────────────
 
     async def _try_send_discord_dm(self, user: discord.User | discord.Member) -> None:
-        """DM the user a welcome embed the first time they write in a bridged channel."""
+        """Send a welcome DM to a Discord user."""
         try:
             embed = discord.Embed(
                 title="📡 Stoat ↔ Discord Bridge",
@@ -999,7 +1079,7 @@ class DiscordBot(commands.Bot):
             sent_id = _extract_id(sent)
             if sent_id:
                 _cache_pair(message.id, sent_id)
-                logger.debug(f"Discord -> Stoat: cached discord={message.id} <-> stoat={sent_id}")
+                logger.debug(f"Discord -> Stoat: ✓ forwarded message from {message.author.display_name}")
             else:
                 logger.warning(
                     f"Discord -> Stoat: could not extract ID from sent object "
