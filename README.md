@@ -156,3 +156,6 @@ Same command – the bridge will find the existing `.env`, skip the setup wizard
 - Message deletion is synced in both directions. If a message is deleted on one platform it is automatically removed on the other.
 - Stoat custom emoji names are resolved via the Stoat API and cached in memory for the duration of the process.
 - First-time users on both platforms receive a one-time DM explaining what the bridge does and how their messages are handled.
+
+
+# Contributing is always appreciated! Feel free to open an Issue or a Pull Request! 
