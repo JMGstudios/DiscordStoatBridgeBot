@@ -134,7 +134,10 @@ def interactive_env_setup() -> None:
     stoat_raw    = existing.get("STOAT_CHANNEL_IDS",   "")
     needs_channels = not _validate_channel_pairs(discord_raw, stoat_raw)
 
-    needs_revolt_url = not existing.get("REVOLT_API_URL", "").strip()
+    needs_revolt_url = (
+        not existing.get("REVOLT_API_URL", "").strip()
+        or not existing.get("REVOLT_WS_URL", "").strip()
+    )
 
     anything_missing = any([
         needs_discord_token, needs_stoat_token, needs_channels, needs_revolt_url,
@@ -143,7 +146,7 @@ def interactive_env_setup() -> None:
     if not anything_missing:
         load_dotenv(ENV_FILE)
         print(f"Config loaded from: {ENV_FILE.resolve()}")
-        return  # All good – no interaction needed
+        return  # All set, setup isnt needed
 
     banner = "=" * 60
     print(f"\n{banner}")
@@ -157,7 +160,7 @@ def interactive_env_setup() -> None:
         if needs_discord_token: missing_keys.append("DISCORD_BOT_TOKEN")
         if needs_stoat_token:   missing_keys.append("STOAT_BOT_TOKEN")
         if needs_channels:      missing_keys.append("DISCORD_CHANNEL_IDS / STOAT_CHANNEL_IDS")
-        if needs_revolt_url:    missing_keys.append("REVOLT_API_URL")
+        if needs_revolt_url:    missing_keys.append("REVOLT_API_URL / REVOLT_WS_URL")
         print(f"  ⚠  Missing or invalid keys: {', '.join(missing_keys)}")
     print("  Press Ctrl-C at any time to abort.\n")
 
@@ -183,12 +186,21 @@ def interactive_env_setup() -> None:
         existing["STOAT_CHANNEL_IDS"]   = s_raw
         print()
 
-    # Revolt API URL (optional – has a sensible default)
+    # Revolt API URL + WebSocket URL (both optional – sensible defaults)
     if needs_revolt_url:
-        print("› Revolt / Stoat API URL")
+        print("› Revolt / Stoat API URL (HTTP)")
         print("  Press Enter to accept the default!")
+        print("  Only change this if you are using a self-hosted instance.")
         url = _prompt("API URL  [https://api.revolt.chat]", allow_empty=True)
         existing["REVOLT_API_URL"] = url or "https://api.revolt.chat"
+        print()
+        print()
+
+        print("› Revolt / Stoat WebSocket URL")
+        print("  Press Enter to accept the default!")
+        print("  Only change this if you are using a self-hosted instance.")
+        ws_url = _prompt("WS URL  [wss://ws.revolt.chat]", allow_empty=True)
+        existing["REVOLT_WS_URL"] = ws_url or "wss://ws.revolt.chat"
         print()
 
     # ── 4. Write / update the .env file ─────────────────────────────────────
@@ -219,6 +231,7 @@ DISCORD_CHANNEL_IDS: list[int] = [int(x.strip()) for x in _discord_raw.split(","
 STOAT_CHANNEL_IDS:   list[str] = [x.strip()      for x in _stoat_raw.split(",")   if x.strip()]
 
 REVOLT_API_URL = os.getenv("REVOLT_API_URL", "https://api.revolt.chat").rstrip("/")
+REVOLT_WS_URL  = os.getenv("REVOLT_WS_URL",  "wss://ws.revolt.chat").rstrip("/")
 
 if len(DISCORD_CHANNEL_IDS) != len(STOAT_CHANNEL_IDS):
     raise RuntimeError(
@@ -1134,7 +1147,11 @@ async def main():
     for i, (d, s) in enumerate(zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS), 1):
         logger.info(f"  Pair {i}: Discord {d} <-> Stoat {s}")
 
-    stoat_bot   = StoatBot(token=STOAT_BOT_TOKEN)
+    stoat_bot   = StoatBot(
+        token=STOAT_BOT_TOKEN,
+        http_base=REVOLT_API_URL,       # This is only needed if you run an self-hosted instance
+        websocket_base=REVOLT_WS_URL,
+    )
     discord_bot = DiscordBot()
     discord_bot._stoat_bot = stoat_bot   # cross-reference for deletion
     stoat_bot._discord_bot = discord_bot  # cross-reference for user-message deletion
