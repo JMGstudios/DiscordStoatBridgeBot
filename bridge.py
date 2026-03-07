@@ -137,6 +137,7 @@ def interactive_env_setup() -> None:
     needs_revolt_url = (
         not existing.get("REVOLT_API_URL", "").strip()
         or not existing.get("REVOLT_WS_URL", "").strip()
+        or not existing.get("REVOLT_CDN_URL", "").strip()
     )
 
     anything_missing = any([
@@ -160,7 +161,7 @@ def interactive_env_setup() -> None:
         if needs_discord_token: missing_keys.append("DISCORD_BOT_TOKEN")
         if needs_stoat_token:   missing_keys.append("STOAT_BOT_TOKEN")
         if needs_channels:      missing_keys.append("DISCORD_CHANNEL_IDS / STOAT_CHANNEL_IDS")
-        if needs_revolt_url:    missing_keys.append("REVOLT_API_URL / REVOLT_WS_URL")
+        if needs_revolt_url:    missing_keys.append("REVOLT_API_URL / REVOLT_WS_URL / REVOLT_CDN_URL")
         print(f"  ⚠  Missing or invalid keys: {', '.join(missing_keys)}")
     print("  Press Ctrl-C at any time to abort.\n")
 
@@ -203,6 +204,14 @@ def interactive_env_setup() -> None:
         existing["REVOLT_WS_URL"] = ws_url or "wss://ws.revolt.chat"
         print()
 
+        print("› Revolt / Stoat CDN URL (for avatars & attachments)")
+        print("  Press Enter to accept the default!")
+        print("  Only change this if you are using a self-hosted instance.")
+        print("  This is the URL of your Autumn (file server) instance.")
+        cdn_url = _prompt("CDN URL  [https://autumn.revolt.chat]", allow_empty=True)
+        existing["REVOLT_CDN_URL"] = cdn_url or "https://autumn.revolt.chat"
+        print()
+
     # ── 4. Write / update the .env file ─────────────────────────────────────
     ENV_FILE.touch(exist_ok=True)
     for key, value in existing.items():
@@ -232,6 +241,7 @@ STOAT_CHANNEL_IDS:   list[str] = [x.strip()      for x in _stoat_raw.split(",") 
 
 REVOLT_API_URL = os.getenv("REVOLT_API_URL", "https://api.revolt.chat").rstrip("/")
 REVOLT_WS_URL  = os.getenv("REVOLT_WS_URL",  "wss://ws.revolt.chat").rstrip("/")
+REVOLT_CDN_URL = os.getenv("REVOLT_CDN_URL", "https://autumn.revolt.chat").rstrip("/")
 
 if len(DISCORD_CHANNEL_IDS) != len(STOAT_CHANNEL_IDS):
     raise RuntimeError(
@@ -391,6 +401,11 @@ def _extract_id(obj) -> str | None:
 def _stoat_asset_url(asset) -> str | None:
     if asset is None:
         return None
+    asset_id = getattr(asset, "_id", None) or getattr(asset, "id", None)
+    tag      = getattr(asset, "tag", None)
+    if asset_id and tag:
+        return f"{REVOLT_CDN_URL}/{tag}/{asset_id}"
+    # Fallback: use whatever the library returns
     url_attr = getattr(asset, "url", None)
     try:
         return url_attr() if callable(url_attr) else str(url_attr)
