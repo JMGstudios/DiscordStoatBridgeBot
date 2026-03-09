@@ -2,7 +2,7 @@ services:
   bridgebot:
     image: ghcr.io/jmgstudios/discordstoatbridgebot:latest
     volumes:
-      - ./config:/app
+      - ./config/.env:/app/.env:ro
     stdin_open: true
     tty: true
     restart: unless-stopped
