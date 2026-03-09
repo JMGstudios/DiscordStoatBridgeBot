@@ -259,7 +259,7 @@ DISCORD_TO_STOAT: dict[int, str] = {d: s for d, s in zip(DISCORD_CHANNEL_IDS, ST
 #  Set to False to disable welcome DMs on both Discord and Stoat.
 # ──────────────────────────────────────────────────────────────────────────────
 
-SEND_WELCOME_DMS = False
+SEND_WELCOME_DMS = True
 
 # 25MB file size limit due to discord's restrictions
 MAX_FILE_SIZE  = 25 * 1024 * 1024
