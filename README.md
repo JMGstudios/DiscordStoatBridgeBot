@@ -114,6 +114,7 @@ docker pull ghcr.io/jmgstudios/discordstoatbridgebot:latest
 **2. Create a persistent config file on your host**
 ```bash
 touch ~/.config/bridgebot/.env
+touch ~/.config/bridgebot/notified_users.json
 ```
 
 > **Important:** You must mount only the `.env` file – not the entire directory. Mounting the whole folder would hide `bridge.py` inside the container and the bot won't start.
