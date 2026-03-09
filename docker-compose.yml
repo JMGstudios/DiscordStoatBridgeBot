@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
+    working_dir: /config
+    command: python /app/bridge.py
     volumes:
-      - ~/.config/bridgebot/.env:/app/.env
-      - ~/.config/bridgebot/notified_users.json:/app/notified_users.json
+      - ~/.config/bridgebot:/config
