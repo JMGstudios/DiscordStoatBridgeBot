@@ -1,8 +1,10 @@
 services:
-  bridgebot:
+  bridge:
     image: ghcr.io/jmgstudios/discordstoatbridgebot:latest
-    volumes:
-      - ./config/.env:/app/.env:ro
+    container_name: stoat-discord-bridge
+    restart: unless-stopped
     stdin_open: true
     tty: true
-    restart: unless-stopped
+    volumes:
+      - ~/.config/bridgebot/.env:/app/.env
+      - ~/.config/bridgebot/notified_users.json:/app/notified_users.json
