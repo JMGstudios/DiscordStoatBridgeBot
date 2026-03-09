@@ -118,17 +118,12 @@ mkdir -p ~/.config/bridgebot
 
 > **Important:** You must mount only the `.env` file – not the entire directory. Mounting the whole folder would hide `bridge.py` inside the container and the bot won't start.
 
-**3. First start – interactive setup**
+**3. Start – interactive setup**
 ```bash
-sudo docker run -it -v ~/.config/bridgebot/.env:/app/.env ghcr.io/jmgstudios/discordstoatbridgebot:latest
+sudo docker run -it -v ~/.config/bridgebot:/config -w /config ghcr.io/jmgstudios/discordstoatbridgebot:latest python /app/bridge.py
 ```
 
 The setup wizard will guide you through the configuration and save your tokens and channel pairs to `~/.config/bridgebot/.env` on your host machine.
-
-**4. Every new start**
-```bash
-sudo docker run -it -v ~/.config/bridgebot/.env:/app/.env ghcr.io/jmgstudios/discordstoatbridgebot:latest
-```
 
 Same command – the bridge will find the existing `.env`, skip the setup wizard, and start immediately.
 
