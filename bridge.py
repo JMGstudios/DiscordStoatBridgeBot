@@ -254,6 +254,13 @@ PAIR_COUNT = len(DISCORD_CHANNEL_IDS)
 STOAT_TO_DISCORD: dict[str, int] = {s: d for d, s in zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS)}
 DISCORD_TO_STOAT: dict[int, str] = {d: s for d, s in zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS)}
 
+# ──────────────────────────────────────────────────────────────────────────────
+#  WELCOME DM TOGGLE
+#  Set to False to disable welcome DMs on both Discord and Stoat.
+# ──────────────────────────────────────────────────────────────────────────────
+
+SEND_WELCOME_DMS = False
+
 # 25MB file size limit due to discord's restrictions
 MAX_FILE_SIZE  = 25 * 1024 * 1024
 
@@ -274,7 +281,7 @@ logger = logging.getLogger("bridge")
 #  FIRST-TIME USER NOTIFICATION  (persisted to JSON)
 # ──────────────────────────────────────────────────────────────────────────────
 
-NOTIFIED_USERS_FILE = Path("notified_users.json")
+NOTIFIED_USERS_FILE = ENV_FILE.parent / "notified_users.json"
 
 # Structure: { "discord": ["123456", ...], "stoat": ["ABCDEF...", ...] }
 _notified_users: dict[str, list[str]] = {"discord": [], "stoat": []}
@@ -803,7 +810,7 @@ class StoatBot(stoat.Client):
 
         # ── First-time DM ─────────────────────────────────────────────────────
         uid = str(msg.author_id)
-        if not _is_notified("stoat", uid):
+        if SEND_WELCOME_DMS and not _is_notified("stoat", uid):
             _mark_notified("stoat", uid)
             asyncio.create_task(self._try_send_stoat_dm(uid))
 
@@ -1037,7 +1044,7 @@ class DiscordBot(commands.Bot):
 
         # ── First-time DM ─────────────────────────────────────────────────────
         uid = str(message.author.id)
-        if not _is_notified("discord", uid):
+        if SEND_WELCOME_DMS and not _is_notified("discord", uid):
             _mark_notified("discord", uid)
             asyncio.create_task(self._try_send_discord_dm(message.author))
 
