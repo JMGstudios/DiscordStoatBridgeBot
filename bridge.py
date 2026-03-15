@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Discord / Stoat Bidirectional Bridge
+Discord / Stoat Bridge (Bidirectional & One-Way)
 
      ██╗ ███╗   ███╗  ██████╗
      ██║ ████╗ ████║ ██╔════╝
@@ -64,16 +64,16 @@ def _prompt(label: str, secret: bool = False, allow_empty: bool = False) -> str:
         print("    ⚠  Value cannot be empty, please try again.")
 
 
-def _prompt_channel_pairs() -> tuple[str, str]:
-    """
-    Ask the user to configure channel pairs one-by-one.
-    """
+def _prompt_channel_pairs() -> tuple[str, str, str]:
     print("  You will now link Discord channels to Stoat channels one pair at a time.")
     print("  Each pair bridges one Discord channel with one Stoat channel.\n")
 
     discord_ids: list[str] = []
     stoat_ids:   list[str] = []
+    directions:  list[str] = []
     pair_num = 1
+
+    _DIR_LABELS = {"bi": "↔  Bidirectional", "discord": "→  Discord → Stoat only", "stoat": "←  Stoat → Discord only"}
 
     while True:
         print(f"  ── Pair {pair_num} {'(first pair)' if pair_num == 1 else ''} ──")
@@ -82,12 +82,36 @@ def _prompt_channel_pairs() -> tuple[str, str]:
         discord_ids.append(d_id.strip())
         stoat_ids.append(s_id.strip())
 
-        print(f"\n  ✔  Pair {pair_num} saved: Discord {d_id.strip()} ↔ Stoat {s_id.strip()}")
+        # ── Direction prompt ──────────────────────────────────────────────────
+        print(f"\n  Bridge direction for pair {pair_num}:")
+        print(f"\n  Choose wether your bridge should be bidirectional or only transfer messages in one direction")
+        print("    [1]  Bidirectional   (Discord ↔ Stoat)")
+        print("    [2]  Discord → Stoat only")
+        print("    [3]  Stoat → Discord only")
+        while True:
+            try:
+                dir_choice = input("  Choice [1/2/3]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nSetup aborted.")
+                raise SystemExit(1)
+            if dir_choice == "1":
+                direction = "bi"
+                break
+            elif dir_choice == "2":
+                direction = "discord"
+                break
+            elif dir_choice == "3":
+                direction = "stoat"
+                break
+            print("    ⚠  Please enter 1, 2, or 3.")
+        directions.append(direction)
+
+        print(f"\n  ✔  Pair {pair_num} saved: Discord {d_id.strip()} {_DIR_LABELS[direction]} Stoat {s_id.strip()}")
 
         if pair_num >= 2:
             print(f"\n  Current pairs:")
-            for i, (d, s) in enumerate(zip(discord_ids, stoat_ids), 1):
-                print(f"    {i}. Discord {d} ↔ Stoat {s}")
+            for i, (d, s, dr) in enumerate(zip(discord_ids, stoat_ids, directions), 1):
+                print(f"    {i}. Discord {d} {_DIR_LABELS[dr]} Stoat {s}")
 
         print()
         try:
@@ -101,7 +125,7 @@ def _prompt_channel_pairs() -> tuple[str, str]:
         else:
             break
 
-    return ",".join(discord_ids), ",".join(stoat_ids)
+    return ",".join(discord_ids), ",".join(stoat_ids), ",".join(directions)
 
 
 def _validate_channel_pairs(discord_raw: str, stoat_raw: str) -> bool:
@@ -134,6 +158,16 @@ def interactive_env_setup() -> None:
     stoat_raw    = existing.get("STOAT_CHANNEL_IDS",   "")
     needs_channels = not _validate_channel_pairs(discord_raw, stoat_raw)
 
+    # Directions must exist and match pair count; if not, re-prompt channels too.
+    _dir_raw   = existing.get("CHANNEL_DIRECTIONS", "")
+    _dir_list  = [x.strip() for x in _dir_raw.split(",") if x.strip()]
+    _pair_count = len([x for x in discord_raw.split(",") if x.strip()])
+    _valid_dirs = {"bi", "discord", "stoat"}
+    if not needs_channels and (
+        len(_dir_list) != _pair_count
+        or any(d not in _valid_dirs for d in _dir_list)
+    ):
+        needs_channels = True   # re-prompt pairs + directions together
     needs_revolt_url = (
         not existing.get("REVOLT_API_URL", "").strip()
         or not existing.get("REVOLT_WS_URL", "").strip()
@@ -160,7 +194,7 @@ def interactive_env_setup() -> None:
         missing_keys = []
         if needs_discord_token: missing_keys.append("DISCORD_BOT_TOKEN")
         if needs_stoat_token:   missing_keys.append("STOAT_BOT_TOKEN")
-        if needs_channels:      missing_keys.append("DISCORD_CHANNEL_IDS / STOAT_CHANNEL_IDS")
+        if needs_channels:      missing_keys.append("DISCORD_CHANNEL_IDS / STOAT_CHANNEL_IDS / CHANNEL_DIRECTIONS")
         if needs_revolt_url:    missing_keys.append("REVOLT_API_URL / REVOLT_WS_URL / REVOLT_CDN_URL")
         print(f"  ⚠  Missing or invalid keys: {', '.join(missing_keys)}")
     print("  Press Ctrl-C at any time to abort.\n")
@@ -182,9 +216,10 @@ def interactive_env_setup() -> None:
     # Channel pairs – collected one pair at a time
     if needs_channels:
         print("› Channel Pairs")
-        d_raw, s_raw = _prompt_channel_pairs()
-        existing["DISCORD_CHANNEL_IDS"] = d_raw
-        existing["STOAT_CHANNEL_IDS"]   = s_raw
+        d_raw, s_raw, dir_raw = _prompt_channel_pairs()
+        existing["DISCORD_CHANNEL_IDS"]  = d_raw
+        existing["STOAT_CHANNEL_IDS"]    = s_raw
+        existing["CHANNEL_DIRECTIONS"]   = dir_raw
         print()
 
     # Revolt API URL + WebSocket URL (both optional – sensible defaults)
@@ -251,15 +286,32 @@ if len(DISCORD_CHANNEL_IDS) != len(STOAT_CHANNEL_IDS):
 
 PAIR_COUNT = len(DISCORD_CHANNEL_IDS)
 
-STOAT_TO_DISCORD: dict[str, int] = {s: d for d, s in zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS)}
-DISCORD_TO_STOAT: dict[int, str] = {d: s for d, s in zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS)}
+# ── Per-pair bridge direction ─────────────────────────────────────────────────
+#   "bi"      → bidirectional (default)
+#   "discord" → Discord → Stoat only
+#   "stoat"   → Stoat → Discord only
+_directions_raw = os.getenv("CHANNEL_DIRECTIONS", "")
+CHANNEL_DIRECTIONS: list[str] = [x.strip() for x in _directions_raw.split(",") if x.strip()]
+if len(CHANNEL_DIRECTIONS) != PAIR_COUNT:
+    # Backward-compat: if key is missing, treat every pair as bidirectional.
+    CHANNEL_DIRECTIONS = ["bi"] * PAIR_COUNT
+
+STOAT_TO_DISCORD: dict[str, int] = {
+    s: d
+    for d, s, dir_ in zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS, CHANNEL_DIRECTIONS)
+    if dir_ in ("bi", "stoat")
+}
+DISCORD_TO_STOAT: dict[int, str] = {
+    d: s
+    for d, s, dir_ in zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS, CHANNEL_DIRECTIONS)
+    if dir_ in ("bi", "discord")
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  WELCOME DM TOGGLE
-#  Set to False to disable welcome DMs on both Discord and Stoat.
 # ──────────────────────────────────────────────────────────────────────────────
 
-SEND_WELCOME_DMS = True
+SEND_WELCOME_DMS = True #  Set to False to disable welcome DMs on both Discord and Stoat.
 
 # 25MB file size limit due to discord's restrictions
 MAX_FILE_SIZE  = 25 * 1024 * 1024
@@ -283,7 +335,6 @@ logger = logging.getLogger("bridge")
 
 NOTIFIED_USERS_FILE = ENV_FILE.parent / "notified_users.json"
 
-# Structure: { "discord": ["123456", ...], "stoat": ["ABCDEF...", ...] }
 _notified_users: dict[str, list[str]] = {"discord": [], "stoat": []}
 
 
@@ -371,8 +422,6 @@ stoat_channels:  dict[str, object]           = {}
 _d2s: OrderedDict[int, str] = OrderedDict()   # discord_msg_id → stoat_msg_id
 _s2d: OrderedDict[str, int] = OrderedDict()   # stoat_msg_id   → discord_msg_id
 
-# Discord message IDs that were sent via webhook (Stoat → Discord direction).
-# Regular user messages (Discord → Stoat direction) are NOT in this set.
 # Used in on_message_delete to choose the right deletion method.
 _webhook_discord_ids: set[int] = set()
 
@@ -1129,7 +1178,7 @@ class DiscordBot(commands.Bot):
         """When any Discord message is deleted remove the mirrored Stoat message."""
         discord_msg_id = payload.message_id
 
-        # Loop-break: if we triggered this deletion ourselves, ignore it.
+        # Loop-break: if triggered on ourselves, ignore it.
         if discord_msg_id in _discord_deleting:
             _discord_deleting.discard(discord_msg_id)
             return
@@ -1166,8 +1215,9 @@ async def main():
     _load_notified_users()
 
     logger.info(f"Bridge starting with {PAIR_COUNT} channel pair(s)...")
-    for i, (d, s) in enumerate(zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS), 1):
-        logger.info(f"  Pair {i}: Discord {d} <-> Stoat {s}")
+    _dir_arrow = {"bi": "<->", "discord": "-->", "stoat": "<--"}
+    for i, (d, s, dir_) in enumerate(zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS, CHANNEL_DIRECTIONS), 1):
+        logger.info(f"  Pair {i}: Discord {d} {_dir_arrow.get(dir_, '<->')} Stoat {s}  [{dir_}]")
 
     stoat_bot   = StoatBot(
         token=STOAT_BOT_TOKEN,
