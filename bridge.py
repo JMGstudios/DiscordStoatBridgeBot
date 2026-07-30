@@ -37,6 +37,7 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv, set_key, dotenv_values
 import stoat
+import stoat.shard
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  INTERACTIVE .env SETUP
@@ -717,6 +718,7 @@ class StoatBot(stoat.Client):
         self._discord_bot: "DiscordBot | None" = None  # set in main()
         self._healthpulse: bool = False
         self._health_msg_id: str | None = None
+        self._planned_restart: bool = False  # set by _do_restart(); read by the supervisor in main()
 
     async def on_ready(self, event, /):
         if self._http_session and not self._http_session.closed:
@@ -802,8 +804,12 @@ class StoatBot(stoat.Client):
             logger.info(f"Stoat: ✓ listening in #{ch.name} (id={stoat_id})")
 
     def _do_restart(self) -> None:
-        logger.warning("Stoat: performing full process restart…")
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+        """
+        Now a soft restart instead of yeeting away the whole process. The supervisor in main() will see the _planned_restart flag and restart the bot.
+        """
+        logger.warning("Stoat: closing session for a scheduled restart…")
+        self._planned_restart = True
+        asyncio.create_task(self.close())
 
     async def on_error(self, event, /):
         logger.error(f"Stoat: ⚠ Error event from gateway: {event!r}")
@@ -1208,6 +1214,53 @@ class DiscordBot(commands.Bot):
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+STOAT_RECONNECT_MIN_DELAY = 5    # seconds, first retry after an unplanned drop
+STOAT_RECONNECT_MAX_DELAY = 300  # seconds, cap for exponential backoff
+
+
+async def _run_stoat_supervisor(discord_bot: "DiscordBot") -> None:
+    """
+    Stoat connection loop
+    """
+    delay = STOAT_RECONNECT_MIN_DELAY
+
+    while True:
+        stoat_bot = StoatBot(
+            token=STOAT_BOT_TOKEN,
+            http_base=REVOLT_API_URL,
+            websocket_base=REVOLT_WS_URL,
+        )
+        stoat_bot._discord_bot = discord_bot
+        discord_bot._stoat_bot = stoat_bot
+
+        planned = False
+        try:
+            await stoat_bot.start()
+            planned = stoat_bot._planned_restart
+            if planned:
+                logger.info("Stoat: session closed for a scheduled restart – reconnecting…")
+            else:
+                logger.warning("Stoat: start() returned unexpectedly – reconnecting…")
+        except stoat.shard.Reconnect:
+            logger.warning("Stoat: gateway requested a reconnect – restarting Stoat session…")
+        except asyncio.CancelledError:
+            logger.info("Stoat: supervisor cancelled – shutting down")
+            raise
+        except Exception as exc:
+            logger.error(f"Stoat: connection lost ({exc!r}) – restarting Stoat session…")
+
+        # clean up potential old sessions
+        try:
+            if stoat_bot._http_session and not stoat_bot._http_session.closed:
+                await stoat_bot._http_session.close()
+        except Exception:
+            pass
+
+        delay = STOAT_RECONNECT_MIN_DELAY if planned else min(delay * 2, STOAT_RECONNECT_MAX_DELAY)
+        logger.info(f"Stoat: reconnecting in {delay}s…")
+        await asyncio.sleep(delay)
+
+
 async def main():
     if not all([DISCORD_BOT_TOKEN, STOAT_BOT_TOKEN, DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS]):
         raise RuntimeError("Missing configuration – check your .env file.")
@@ -1219,17 +1272,10 @@ async def main():
     for i, (d, s, dir_) in enumerate(zip(DISCORD_CHANNEL_IDS, STOAT_CHANNEL_IDS, CHANNEL_DIRECTIONS), 1):
         logger.info(f"  Pair {i}: Discord {d} {_dir_arrow.get(dir_, '<->')} Stoat {s}  [{dir_}]")
 
-    stoat_bot   = StoatBot(
-        token=STOAT_BOT_TOKEN,
-        http_base=REVOLT_API_URL,       # This is only needed if you run an self-hosted instance
-        websocket_base=REVOLT_WS_URL,
-    )
     discord_bot = DiscordBot()
-    discord_bot._stoat_bot = stoat_bot   # cross-reference for deletion
-    stoat_bot._discord_bot = discord_bot  # cross-reference for user-message deletion
 
     await asyncio.gather(
-        stoat_bot.start(),
+        _run_stoat_supervisor(discord_bot),
         discord_bot.start(DISCORD_BOT_TOKEN),
     )
 
